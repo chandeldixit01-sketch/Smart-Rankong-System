@@ -1,0 +1,6 @@
+# Redrob Hackathon — Candidate Ranking Engine
+# No external dependencies required. Uses Python standard library only.
+# Python >= 3.8
+
+# Standard library modules used:
+#   json, csv, argparse, os, re, datetime

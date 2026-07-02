@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redrob AI Ranker — Intelligent Candidate Discovery</title>
+    <meta name="description" content="AI-powered candidate ranking system for intelligent discovery and matching against job descriptions.">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-container">
+
+    <!-- Header -->
+    <header class="app-header fade-in-up">
+        <div class="badge">⚡ AI-Powered</div>
+        <h1>Redrob AI Ranker</h1>
+        <p class="subtitle">
+            Drop your candidate pool, paste a job description, and let AI rank the best matches
+            using TF-IDF semantic matching + multi-signal scoring.
+        </p>
+    </header>
+
+    <!-- Input Grid -->
+    <div class="input-grid">
+
+        <!-- Left: File Upload -->
+        <div class="glass-card fade-in-up delay-1">
+            <div class="card-title">
+                <div class="icon">📁</div>
+                Candidate Pool
+            </div>
+            <div class="drop-zone" id="dropZone">
+                <span class="drop-icon">📂</span>
+                <p class="drop-text">
+                    Drag & drop <strong>candidates.jsonl</strong> here<br>
+                    or click to browse
+                </p>
+                <input type="file" id="fileInput" accept=".jsonl,.json" style="display:none">
+            </div>
+            <div class="file-info" id="fileInfo">
+                <span>✅</span>
+                <span id="fileName">—</span>
+                <span id="fileSize" style="margin-left:auto; opacity:0.7">—</span>
+            </div>
+        </div>
+
+        <!-- Right: Job Description -->
+        <div class="glass-card fade-in-up delay-2">
+            <div class="card-title">
+                <div class="icon">📋</div>
+                Job Description
+            </div>
+            <textarea
+                class="jd-textarea"
+                id="jdInput"
+                placeholder="Paste your job description here...
+
+Example: We're looking for a Senior ML Engineer with 5-9 years of experience in embeddings, vector search, RAG, and production ranking systems. Strong Python required. Experience with Pinecone, Weaviate, or FAISS preferred."
+            ></textarea>
+            <div class="jd-actions">
+                <button class="btn-sm" id="btnLoadDefault" title="Load the Redrob JD from the hackathon bundle">
+                    📄 Load Default JD
+                </button>
+                <button class="btn-sm" id="btnClearJd">
+                    🗑️ Clear
+                </button>
+                <span style="margin-left:auto; font-size:0.78rem; color:var(--text-muted);">
+                    <span id="jdWordCount">0</span> words
+                </span>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Action Bar -->
+    <div class="action-bar fade-in-up delay-3">
+        <label style="color:var(--text-secondary); font-size:0.88rem;">
+            Show top
+            <select class="top-n-select" id="topNSelect">
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+            </select>
+            candidates
+        </label>
+        <button class="btn-rank" id="btnRank" disabled>
+            <span class="spinner"></span>
+            <span class="btn-text">🚀 Sort & Rank</span>
+        </button>
+    </div>
+
+    <!-- Stats Bar (hidden until results) -->
+    <div class="stats-bar" id="statsBar" style="display:none"></div>
+
+    <!-- Results Section -->
+    <div class="results-section" id="resultsSection">
+        <div class="results-header">
+            <h2 id="resultsTitle">🏆 Ranked Candidates</h2>
+            <button class="btn-export" id="btnExport">⬇ Export CSV</button>
+        </div>
+        <div class="table-wrap">
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Candidate</th>
+                        <th>Title & Company</th>
+                        <th>Experience</th>
+                        <th>Score</th>
+                        <th>Key Skills</th>
+                        <th>Reasoning</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<!-- Progress Overlay -->
+<div class="progress-overlay" id="progressOverlay">
+    <div class="progress-card">
+        <div class="progress-spinner"></div>
+        <div class="progress-title">Ranking Candidates</div>
+        <div class="progress-status" id="progressStatus">Initializing AI engine…</div>
+        <div class="progress-bar-outer">
+            <div class="progress-bar-inner" id="progressBar"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// =========================================================================
+// State
+// =========================================================================
+let uploadedFile = null;
+let rankingResults = null;
+
+// =========================================================================
+// DOM References
+// =========================================================================
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const fileInfo = document.getElementById('fileInfo');
+const fileName = document.getElementById('fileName');
+const fileSize = document.getElementById('fileSize');
+const jdInput = document.getElementById('jdInput');
+const jdWordCount = document.getElementById('jdWordCount');
+const btnRank = document.getElementById('btnRank');
+const btnLoadDefault = document.getElementById('btnLoadDefault');
+const btnClearJd = document.getElementById('btnClearJd');
+const btnExport = document.getElementById('btnExport');
+const topNSelect = document.getElementById('topNSelect');
+const resultsSection = document.getElementById('resultsSection');
+const resultsBody = document.getElementById('resultsBody');
+const resultsTitle = document.getElementById('resultsTitle');
+const statsBar = document.getElementById('statsBar');
+const progressOverlay = document.getElementById('progressOverlay');
+const progressStatus = document.getElementById('progressStatus');
+const progressBar = document.getElementById('progressBar');
+
+// =========================================================================
+// Drag & Drop
+// =========================================================================
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+
+['dragenter', 'dragover'].forEach(evt => {
+    dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.add('drag-over');
+    });
+});
+
+['dragleave', 'drop'].forEach(evt => {
+    dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('drag-over');
+    });
+});
+
+dropZone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+});
+
+function handleFile(file) {
+    if (!file) return;
+    uploadedFile = file;
+    dropZone.classList.add('has-file');
+    dropZone.querySelector('.drop-icon').textContent = '✅';
+    dropZone.querySelector('.drop-text').innerHTML =
+        `<strong>${file.name}</strong> loaded`;
+    fileName.textContent = file.name;
+    fileSize.textContent = formatBytes(file.size);
+    fileInfo.classList.add('visible');
+    updateRankButton();
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+// =========================================================================
+// Job Description
+// =========================================================================
+jdInput.addEventListener('input', () => {
+    const words = jdInput.value.trim().split(/\s+/).filter(w => w.length > 0);
+    jdWordCount.textContent = words.length;
+    updateRankButton();
+});
+
+btnClearJd.addEventListener('click', () => {
+    jdInput.value = '';
+    jdWordCount.textContent = '0';
+    updateRankButton();
+});
+
+btnLoadDefault.addEventListener('click', async () => {
+    btnLoadDefault.textContent = '⏳ Loading…';
+    try {
+        const resp = await fetch('/api/default-jd');
+        const data = await resp.json();
+        jdInput.value = data.jd;
+        jdInput.dispatchEvent(new Event('input'));
+    } catch (err) {
+        alert('Failed to load default JD: ' + err.message);
+    }
+    btnLoadDefault.textContent = '📄 Load Default JD';
+});
+
+function updateRankButton() {
+    const hasFile = uploadedFile !== null;
+    const hasJd = jdInput.value.trim().length > 20;
+    btnRank.disabled = !(hasFile && hasJd);
+}
+
+// =========================================================================
+// Ranking
+// =========================================================================
+btnRank.addEventListener('click', async () => {
+    if (btnRank.disabled) return;
+    const topN = parseInt(topNSelect.value);
+
+    // Show progress
+    btnRank.classList.add('loading');
+    btnRank.disabled = true;
+    progressOverlay.classList.add('visible');
+    progressBar.style.width = '0%';
+    progressStatus.textContent = 'Uploading candidate file…';
+
+    try {
+        const formData = new FormData();
+        formData.append('candidates', uploadedFile);
+        formData.append('jd', jdInput.value);
+        formData.append('top_n', topN);
+
+        // Start SSE-style polling
+        progressBar.style.width = '15%';
+        progressStatus.textContent = 'Parsing candidates…';
+
+        const resp = await fetch('/api/rank', { method: 'POST', body: formData });
+
+        progressBar.style.width = '60%';
+        progressStatus.textContent = 'Scoring and ranking…';
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || 'Ranking failed');
+        }
+
+        progressBar.style.width = '90%';
+        progressStatus.textContent = 'Preparing results…';
+
+        const data = await resp.json();
+        rankingResults = data;
+
+        progressBar.style.width = '100%';
+        progressStatus.textContent = 'Done!';
+
+        await new Promise(r => setTimeout(r, 500));
+        renderResults(data, topN);
+
+    } catch (err) {
+        alert('Error: ' + err.message);
+    } finally {
+        btnRank.classList.remove('loading');
+        btnRank.disabled = false;
+        progressOverlay.classList.remove('visible');
+        updateRankButton();
+    }
+});
+
+// =========================================================================
+// Render Results
+// =========================================================================
+function renderResults(data, topN) {
+    // Stats
+    statsBar.style.display = 'grid';
+    statsBar.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-value">${data.total_candidates.toLocaleString()}</div>
+            <div class="stat-label">Candidates Scored</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${data.honeypots_found}</div>
+            <div class="stat-label">Honeypots Detected</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${data.consulting_only}</div>
+            <div class="stat-label">Consulting-Only</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${data.runtime_seconds.toFixed(1)}s</div>
+            <div class="stat-label">Runtime</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${(data.results[0]?.score || 0).toFixed(3)}</div>
+            <div class="stat-label">Top Score</div>
+        </div>
+    `;
+
+    // Table
+    resultsTitle.textContent = `🏆 Top ${Math.min(topN, data.results.length)} Ranked Candidates`;
+    resultsBody.innerHTML = '';
+
+    const maxScore = data.results.length > 0 ? data.results[0].score : 1;
+
+    data.results.forEach((r, i) => {
+        const rank = i + 1;
+        const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
+        const barWidth = ((r.score / maxScore) * 100).toFixed(1);
+
+        const skillTags = (r.skills || []).slice(0, 4).map(s => {
+            const cls = r.core_skills && r.core_skills.includes(s) ? 'skill-tag core' : 'skill-tag';
+            return `<span class="${cls}">${s}</span>`;
+        }).join('');
+
+        const tr = document.createElement('tr');
+        tr.style.animationDelay = `${i * 20}ms`;
+        tr.innerHTML = `
+            <td><span class="rank-badge ${rankClass}">${rank}</span></td>
+            <td>
+                <div class="cand-id">${r.candidate_id}</div>
+            </td>
+            <td>
+                <div class="cand-name">${r.title}</div>
+                <div class="cand-meta">${r.company} · ${r.location}</div>
+            </td>
+            <td>${r.years_exp.toFixed(1)} yrs</td>
+            <td>
+                <div class="score-bar-wrap">
+                    <span class="score-value">${r.score.toFixed(3)}</span>
+                    <div class="score-bar"><div class="score-bar-fill" style="width:${barWidth}%"></div></div>
+                </div>
+            </td>
+            <td>${skillTags || '<span class="cand-meta">—</span>'}</td>
+            <td class="reasoning-cell">${r.reasoning}</td>
+        `;
+        resultsBody.appendChild(tr);
+    });
+
+    resultsSection.classList.add('visible');
+    resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// =========================================================================
+// Export CSV
+// =========================================================================
+btnExport.addEventListener('click', () => {
+    if (!rankingResults || !rankingResults.results.length) return;
+
+    let csv = 'candidate_id,rank,score,reasoning\n';
+    rankingResults.results.forEach((r, i) => {
+        const reasoning = r.reasoning.replace(/"/g, '""');
+        csv += `${r.candidate_id},${i + 1},${r.score.toFixed(4)},"${reasoning}"\n`;
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'submission.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+</script>
+</body>
+</html>
